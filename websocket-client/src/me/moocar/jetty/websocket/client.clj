@@ -1,4 +1,4 @@
-(ns me.moocar.jetty-websocket.websocket-client
+(ns me.moocar.jetty.websocket.client
   (:require [clojure.core.async :as async :refer [go go-loop <! <!!]]
             [me.moocar.jetty.websocket :as websocket])
   (:import (java.net URI)
@@ -15,13 +15,15 @@
     (URI. uri-string)))
 
 (defn start
-  [{:keys [client handler-xf] :as this}]
+  [{:keys [client request-ch] :as this}]
   (if client
     client
     (let [client (WebSocketClient.)
           uri (make-uri this)
-          conn (websocket/make-connection-map)
-          listener (websocket/start-connection conn handler-xf)]
+          conn (assoc (websocket/make-connection-map)
+                 :request-ch request-ch)
+          listener (websocket/listener conn)]
+      (websocket/connection-lifecycle conn)
       (.start client)
       (if (deref (.connect client listener uri) 1000 nil)
         (assoc this
@@ -39,6 +41,5 @@
     this))
 
 (defn new-websocket-client
-  [config handler-xf]
-  (merge config
-         {:handler-xf handler-xf}))
+  [config]
+  (merge config))

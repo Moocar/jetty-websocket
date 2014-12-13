@@ -1,4 +1,4 @@
-(ns me.moocar.jetty.websocket-server
+(ns me.moocar.jetty.websocket.server
   (:require [clojure.core.async :as async :refer [go go-loop <! >!!]]
             [me.moocar.jetty.websocket :as websocket])
   (:import (org.eclipse.jetty.server Server ServerConnector)
