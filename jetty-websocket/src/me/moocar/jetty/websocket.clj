@@ -206,19 +206,5 @@
              (println "closing because" status-code reason)
              (async/close! connect-ch)))))))
 
-(defn start-connection
-  "Starts listening on connection for connects, reads and writes. If
-  called with arity-1, a default connection and listener are created,
-  and the listener is returned"
-  ([conn handler-xf]
-     (let [listener (listener conn)]
-       (start-connection conn listener handler-xf)))
-  ([conn listener handler-xf]
-     (let [to-ch (async/chan 1 (map (fn [x] (println "out:" x))))]
-       (connection-lifecycle conn)
-       (async/pipeline-blocking 1
-                                to-ch
-                                handler-xf
-                                (:request-ch conn))
-       listener)))
+
 

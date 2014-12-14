@@ -16,7 +16,8 @@
                              (response-cb body-bytes))
                            nil))
         server (websocket-server/start
-                (websocket-server/new-websocket-server config handler-xf))]
+                (assoc (websocket-server/new-websocket-server config)
+                  :handler-xf handler-xf))]
     (try
       (let [client (websocket-client/start
                     (assoc (websocket-client/new-websocket-client config)

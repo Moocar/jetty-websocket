@@ -16,13 +16,34 @@
     (configure [factory]
       (.setCreator factory creator))))
 
+(defn listen-for-connections
+  "Starts listening on connection for connects, reads and writes. If
+  called with arity-1, a default connection and listener are created,
+  and the listener is returned"
+  ([conn handler-xf]
+     (let [listener (websocket/listener conn)]
+       (start-connection conn listener handler-xf)))
+  ([conn listener handler-xf]
+     (let [to-ch (async/chan 1 (map (fn [x] (println "out:" x))))]
+       (websocket/connection-lifecycle conn)
+       (async/pipeline-blocking 1
+                                to-ch
+                                handler-xf
+                                (:request-ch conn))
+       listener)))
+
+(defn default-conn-f
+  [request]
+  (println "in make default conn" (.getLocalAddress request))
+  (let [send-ch (async/chan 1)]
+    (websocket/make-connection-map send-ch)))
+
 (defn create-websocket
-  [handler-xf]
+  [new-conn-f handler-xf]
   (fn [this request response]
-    (let [send-ch (async/chan 1)
-          conn (websocket/make-connection-map send-ch)]
+    (let [conn (new-conn-f request)]
       (websocket/start-send-pipeline conn)
-      (websocket/start-connection conn handler-xf))))
+      (listen-for-connections conn handler-xf))))
 
 (defn- websocket-creator 
   "Creates a WebSocketCreator that when a websocket is opened, waits
@@ -33,16 +54,18 @@
   [create-websocket-f]
   (reify WebSocketCreator
     (createWebSocket [this request response]
+      (println "request" (.getLocalAddress request))
       (create-websocket-f this request response))))
 
 (defn start
-  [{:keys [port handler-xf server] :as this}]
+  [{:keys [port new-conn-f handler-xf server] :as this}]
   (if server
     this
     (let [server (Server.)
           connector (doto (ServerConnector. server)
                       (.setPort port))
-          create-websocket-f (create-websocket handler-xf)
+          new-conn-f (or new-conn-f default-conn-f)
+          create-websocket-f (create-websocket new-conn-f handler-xf)
           creator (websocket-creator create-websocket-f)
           ws-handler (websocket-handler creator)]
       (.addConnector server connector)
@@ -60,6 +83,5 @@
     this))
 
 (defn new-websocket-server
-  [config handler-xf]
-  (merge {:port (:port config)}
-         {:handler-xf handler-xf}))
+  [config]
+  (merge {:port (:port config)}))
