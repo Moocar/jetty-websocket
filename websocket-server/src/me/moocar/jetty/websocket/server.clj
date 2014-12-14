@@ -19,7 +19,9 @@
 (defn create-websocket
   [handler-xf]
   (fn [this request response]
-    (let [conn (websocket/make-connection-map)]
+    (let [send-ch (async/chan 1)
+          conn (websocket/make-connection-map send-ch)]
+      (websocket/start-send-pipeline conn)
       (websocket/start-connection conn handler-xf))))
 
 (defn- websocket-creator 

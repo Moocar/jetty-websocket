@@ -60,7 +60,7 @@
    request-id
    response-ch]
   (swap! response-chans-atom assoc request-id response-ch)
-  (async/take! (async/timeout 30000)
+  (async/take! (async/timeout 10000)
                (fn [_]
                  (async/close! response-ch)
                  (swap! response-chans-atom dissoc request-id))))
@@ -89,52 +89,52 @@
   (response-cb response-bytes)
   nil)
 
-(defrecord WebSocketConnection [write-ch request-id-seq-atom]
-  transport/Transport
-  (-send! [conn bytes response-ch]
-    (let [request-id (swap! request-id-seq-atom inc)
-          body-size (alength bytes)
-          request-id-size (/ (Long/SIZE) 8)
-          buffer-size (+ 1 request-id-size body-size)
-          buf (.. (ByteBuffer/allocate buffer-size)
-                  (put request-flag)
-                  (putLong request-id)
-                  (put bytes)
-                  (rewind))]
-      (add-response-ch conn request-id response-ch)
-      (async/put! write-ch buf)
-      response-ch))
-  (-send-off! [this bytes]
-    (let [buf (.. (ByteBuffer/allocate (inc (alength bytes)))
-                  (put no-request-flag)
-                  (put bytes)
-                  (rewind))]
-      (async/put! write-ch buf))))
+(defn request-buf
+  "Returns a function that takes a vector of bytes and response-ch,
+  and returns a byte buffer that contains the packet-type, request-id
+  and body bytes"
+  [{:keys [request-id-seq-atom] :as conn}]
+  (fn [[bytes response-ch]]
+    (if response-ch
+      (let [request-id (swap! request-id-seq-atom inc)
+            body-size (alength bytes)
+            request-id-size (/ (Long/SIZE) 8)
+            buffer-size (+ 1 request-id-size body-size)
+            buf (.. (ByteBuffer/allocate buffer-size)
+                    (put request-flag)
+                    (putLong request-id)
+                    (put bytes)
+                    (rewind))]
+        (add-response-ch conn request-id response-ch)
+        buf)
+      (let [body-size (alength bytes)
+            buffer-size (+ 1 body-size)
+            buf (.. (ByteBuffer/allocate buffer-size)
+                    (put no-request-flag)
+                    (put bytes)
+                    (rewind))]
+        buf))))
 
-(defn send-off!
-  "Sends a message on connection and doesn't wait for a response"
-  [conn bytes]
-  (transport/-send-off! conn bytes))
-
-(defn send!
-  "Sends a message on connection. The response will be put onto
-  response-ch"
-  [conn bytes response-ch]
-  (transport/-send! conn bytes response-ch))
+(defn start-send-pipeline
+  [conn]
+  (async/pipeline 1
+                  (:write-ch conn)
+                  (map (request-buf conn))
+                  (:send-ch conn)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Websocket connections
 
 (defn make-connection-map
-  []
-  (map->WebSocketConnection
-   {:connect-ch (async/chan 2)
-    :request-ch (async/chan 1024)
-    :read-ch (async/chan 1024)
-    :write-ch (async/chan 1024)
-    :error-ch (async/chan 1024)
-    :response-chans-atom (atom {})
-    :request-id-seq-atom (atom 0)}))
+  [send-ch]
+  {:connect-ch (async/chan 2)
+   :request-ch (async/chan 1024)
+   :send-ch send-ch
+   :read-ch (async/chan 1024)
+   :write-ch (async/chan 1024)
+   :error-ch (async/chan 1024)
+   :response-chans-atom (atom {})
+   :request-id-seq-atom (atom 0)})
 
 (defn listener
   "Returns a websocket listener that does nothing but put connections,

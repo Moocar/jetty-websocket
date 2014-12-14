@@ -15,14 +15,15 @@
     (URI. uri-string)))
 
 (defn start
-  [{:keys [client request-ch] :as this}]
+  [{:keys [client request-ch send-ch] :as this}]
   (if client
     client
     (let [client (WebSocketClient.)
           uri (make-uri this)
-          conn (assoc (websocket/make-connection-map)
+          conn (assoc (websocket/make-connection-map send-ch)
                  :request-ch request-ch)
           listener (websocket/listener conn)]
+      (websocket/start-send-pipeline conn)
       (websocket/connection-lifecycle conn)
       (.start client)
       (if (deref (.connect client listener uri) 1000 nil)
