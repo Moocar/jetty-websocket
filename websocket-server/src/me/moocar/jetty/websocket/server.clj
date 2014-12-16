@@ -1,7 +1,8 @@
 (ns me.moocar.jetty.websocket.server
   (:require [clojure.core.async :as async :refer [go go-loop <! >!!]]
             [me.moocar.jetty.websocket :as websocket])
-  (:import (org.eclipse.jetty.server Server ServerConnector)
+  (:import (java.nio ByteBuffer)
+           (org.eclipse.jetty.server Server ServerConnector)
            (org.eclipse.jetty.websocket.api WebSocketListener WriteCallback)
            (org.eclipse.jetty.websocket.server WebSocketHandler)
            (org.eclipse.jetty.websocket.servlet WebSocketCreator)))
@@ -16,7 +17,20 @@
     (configure [factory]
       (.setCreator factory creator))))
 
-(defn listen-for-connections
+(defn response-buf
+  "Sends a response for request-id on connection"
+  [{:keys [response-bytes request-id] :as request}]
+  (when response-bytes
+    (let [[bytes offset len] response-bytes
+          buf (.. (ByteBuffer/allocate (+ 1 8 len))
+                  (put websocket/response-flag)
+                  (putLong request-id)
+                  (put bytes offset len)
+                  (rewind))]
+      buf)))
+
+
+(defn start-connection
   "Starts listening on connection for connects, reads and writes. If
   called with arity-1, a default connection and listener are created,
   and the listener is returned"
@@ -24,11 +38,12 @@
      (let [listener (websocket/listener conn)]
        (start-connection conn listener handler-xf)))
   ([conn listener handler-xf]
-     (let [to-ch (async/chan 1 (map (fn [x] (println "out:" x))))]
+     (let [{:keys [write-ch]} conn]
        (websocket/connection-lifecycle conn)
        (async/pipeline-blocking 1
-                                to-ch
-                                handler-xf
+                                write-ch
+                                (comp handler-xf
+                                      (keep response-buf))
                                 (:request-ch conn))
        listener)))
 
@@ -43,7 +58,7 @@
   (fn [this request response]
     (let [conn (new-conn-f request)]
       (websocket/start-send-pipeline conn)
-      (listen-for-connections conn handler-xf))))
+      (start-connection conn handler-xf))))
 
 (defn- websocket-creator 
   "Creates a WebSocketCreator that when a websocket is opened, waits

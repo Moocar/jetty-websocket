@@ -65,30 +65,6 @@
                  (async/close! response-ch)
                  (swap! response-chans-atom dissoc request-id))))
 
-(defn send-response
-  "Sends a response for request-id on connection"
-  [{:keys [write-ch] :as conn}
-   request-id
-   [bytes offset len]]
-  (let [buf (.. (ByteBuffer/allocate (+ 1 8 len))
-                (put response-flag)
-                (putLong request-id)
-                (put bytes offset len)
-                (rewind))]
-    (async/put! write-ch buf)))
-
-(defn- make-response-cb
-  "Returns a function that takes bytes and sends them as a response
-  for request-id on connection"
-  [conn request-id]
-  (fn [body-bytes]
-    (send-response conn request-id body-bytes)))
-
-(defn response-cb
-  [{:keys [response-bytes response-cb] :as request}]
-  (response-cb response-bytes)
-  nil)
-
 (defn request-buf
   "Returns a function that takes a vector of bytes and response-ch,
   and returns a byte buffer that contains the packet-type, request-id
@@ -139,7 +115,7 @@
 (defn listener
   "Returns a websocket listener that does nothing but put connections,
   reads or errors into the respective channels"
-  [{:keys [connect-ch read-ch error-ch] :as conn}]
+  [{:keys [connect-ch read-ch request-ch error-ch] :as conn}]
   (reify WebSocketListener
     (onWebSocketConnect [this session]
       (async/put! connect-ch session))
@@ -172,7 +148,7 @@
         request (cond-> {:conn conn
                          :body-bytes body-bytes}
                         (= packet-type request-flag)
-                        (assoc :response-cb (make-response-cb conn request-id)))]
+                        (assoc :request-id request-id))]
     (async/put! to-ch request)))
 
 (defn connection-lifecycle
@@ -184,7 +160,8 @@
   [{:keys [connect-ch read-ch write-ch] :as conn}]
   (go
     (when-let [session (<! connect-ch)]
-      (go-loop []
+      (loop []
+        (println "looping")
         (async/alt!
 
           read-ch
@@ -198,6 +175,7 @@
 
           write-ch
           ([buf]
+             (println "got write" buf)
              (send-bytes! (.getRemote session) buf)
              (recur))
           
