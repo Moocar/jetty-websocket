@@ -1,5 +1,5 @@
 (ns me.moocar.jetty.websocket.server
-  (:require [clojure.core.async :as async :refer [go go-loop <! >!!]]
+  (:require [clojure.core.async :as async :refer [go go-loop <! >!! <!!]]
             [me.moocar.jetty.websocket :as websocket])
   (:import (java.nio ByteBuffer)
            (org.eclipse.jetty.server Server ServerConnector)
@@ -20,6 +20,7 @@
 (defn response-buf
   "Sends a response for request-id on connection"
   [{:keys [response-bytes request-id] :as request}]
+  (println "request" request)
   (when response-bytes
     (let [[bytes offset len] response-bytes
           buf (.. (ByteBuffer/allocate (+ 1 8 len))
@@ -39,7 +40,6 @@
 
 (defn default-conn-f
   [request]
-  (println "in make default conn" (.getLocalAddress request))
   (let [send-ch (async/chan 1)]
     (websocket/make-connection-map send-ch)))
 
@@ -61,17 +61,17 @@
   [create-websocket-f]
   (reify WebSocketCreator
     (createWebSocket [this request response]
-      (println "request" (.getLocalAddress request))
       (create-websocket-f this request response))))
 
 (defn listen-for-requests
   [request-ch handler-xf]
-  (let [to-ch (async/chan 1 (map (fn [_] (println "out"))))]
+  (let [to-ch (async/chan 1 (keep (fn [_] (println "out"))))]
     (async/pipeline-blocking 1
                              to-ch
                              (comp handler-xf
                                    (keep send-to-write-ch))
-                             request-ch)))
+                             request-ch)
+    to-ch))
 
 (defn start
   [{:keys [port new-conn-f handler-xf server] :as this}]
@@ -84,20 +84,30 @@
           new-conn-f (or new-conn-f default-conn-f)
           create-websocket-f (create-websocket request-ch new-conn-f handler-xf)
           creator (websocket-creator create-websocket-f)
-          ws-handler (websocket-handler creator)]
-      (listen-for-requests request-ch handler-xf)
+          ws-handler (websocket-handler creator)
+          request-listener (listen-for-requests request-ch handler-xf)]
       (.addConnector server connector)
       (.setHandler server ws-handler)
       (.start server)
       (assoc this
-        :server server))))
+        :server server
+        :request-ch request-ch
+        :connector connector
+        :request-listener request-listener))))
 
 (defn stop
-  [{:keys [server] :as this}]
+  [{:keys [server connector request-listener request-ch] :as this}]
   (if server
-    (do 
+    (do
+      (println "shutting down connector")
+      (.close connector)
+      (println "closing request ch")
+      (async/close! request-ch)
+      (println "waiting for request listener")
+      (<!! request-listener)
+      (println "stopping server")
       (.stop server)
-      (assoc this :server nil))
+      (assoc this :server nil :connector nil))
     this))
 
 (defn new-websocket-server

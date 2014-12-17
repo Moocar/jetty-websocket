@@ -47,10 +47,13 @@
       (finally
         (websocket-server/stop server)))))
 
-(defn waiting-handler [wait-ch]
+(defn waiting-handler
+  [wait-ch]
   (keep (fn [request]
+          (println "waiting for wait ch")
           (<!! wait-ch)
-          (assoc request :response-bytes (byte-array [(byte 1)])))))
+          (println "wait ch finished")
+          (assoc request :response-bytes [(byte-array [(byte 1)]) 0 1]))))
 
 (deftest t-shutdown-before-finished
   (let [config (local-config)
@@ -61,13 +64,15 @@
       (let [client (start-client config)
             request (byte-array (map byte [1 2 3 4]))]
         (try
-          (let [response-ch (moo-async/request (:send-ch client) request)]
-            (let [server-stopped-ch (async/thread (websocket-server/stop server))]
-              (Thread/sleep 100)
-              (is (not (.isStopped (:server server))))
-              (let [response (<!! response-ch)]
-                (is (= [(byte 1)] (seq (to-bytes (:body-bytes response)))))
-                (async/thread (websocket-server/stop server)))))
+          (let [response-ch (moo-async/request (:send-ch client) request)
+                _ (Thread/sleep 10)
+                server-stopped-ch (async/thread (websocket-server/stop server))]
+            (Thread/sleep 10)
+            (async/close! wait-ch)
+            (is (not (.isStopped (:server server))))
+            (let [response (<!! response-ch)]
+              (is (= [(byte 1)] (seq (to-bytes (:body-bytes response)))))
+              (async/thread (websocket-server/stop server))))
           (finally
             (websocket-client/stop client))))
       (finally
