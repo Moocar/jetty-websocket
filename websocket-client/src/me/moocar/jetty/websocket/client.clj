@@ -24,7 +24,7 @@
                  :request-ch request-ch)
           listener (websocket/listener conn)]
       (websocket/start-send-pipeline conn)
-      (websocket/connection-lifecycle conn)
+      (websocket/connection-lifecycle conn request-ch)
       (.start client)
       (if (deref (.connect client listener uri) 1000 nil)
         (assoc this

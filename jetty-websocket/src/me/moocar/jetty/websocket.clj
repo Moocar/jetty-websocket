@@ -104,7 +104,6 @@
 (defn make-connection-map
   [send-ch]
   {:connect-ch (async/chan 2)
-   :request-ch (async/chan 1024)
    :send-ch send-ch
    :read-ch (async/chan 1024)
    :write-ch (async/chan 1024)
@@ -115,7 +114,7 @@
 (defn listener
   "Returns a websocket listener that does nothing but put connections,
   reads or errors into the respective channels"
-  [{:keys [connect-ch read-ch request-ch error-ch] :as conn}]
+  [{:keys [connect-ch read-ch error-ch] :as conn}]
   (reify WebSocketListener
     (onWebSocketConnect [this session]
       (async/put! connect-ch session))
@@ -135,7 +134,8 @@
   request, a callback function that accepts bytes is assoc'd on
   as :response-cb. If packet is a response to a request, the request
   map is instead put onto the response-ch that was setup in `send!`"
-  [{:keys [read-ch request-ch response-chans-atom] :as conn}
+  [request-ch
+   {:keys [read-ch response-chans-atom] :as conn}
    [bytes offset len]]
   (let [buf (ByteBuffer/wrap bytes offset len)
         packet-type (.get buf)
@@ -157,7 +157,8 @@
   received, puts [session bytes] onto read-ch. Sends any byte-buffers
   in write-ch to the client. A second message put onto connect-ch is
   assumed to be a close signal, which ends the loop"
-  [{:keys [connect-ch read-ch write-ch] :as conn}]
+  [{:keys [connect-ch read-ch write-ch] :as conn}
+   request-ch]
   (go
     (when-let [session (<! connect-ch)]
       (loop []
@@ -167,7 +168,7 @@
           read-ch
           ([v]
              (try
-               (handle-read conn v)
+               (handle-read request-ch conn v)
                (catch Throwable t
                  (println "error handling read" v)
                  (.printStackTrace t)))
