@@ -66,7 +66,12 @@
         (try
           (let [response-ch (moo-async/request (:send-ch client) request)
                 _ (Thread/sleep 10)
-                server-stopped-ch (async/thread (websocket-server/stop server))]
+                server-stopped-ch (async/thread (websocket-server/stop server))
+                throw-ch (async/chan 1)]
+            (try (start-client config)
+                 (catch Throwable t
+                   (async/put! throw-ch t)))
+            (is (instance? Throwable (<!! throw-ch)))
             (Thread/sleep 10)
             (async/close! wait-ch)
             (is (not (.isStopped (:server server))))
