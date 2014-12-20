@@ -80,8 +80,9 @@
     (if response-ch
       (let [request-id (swap! request-id-seq-atom inc)
             body-size (alength bytes)
-            request-id-size (/ (Long/SIZE) 8)
-            buffer-size (+ 1 request-id-size body-size)
+            buffer-size (+ packet-type-bytes-length
+                           request-id-bytes-length
+                           body-size)
             buf (.. (ByteBuffer/allocate buffer-size)
                     (put request-flag)
                     (putLong request-id)
@@ -90,7 +91,7 @@
         (add-response-ch conn request-id response-ch)
         buf)
       (let [body-size (alength bytes)
-            buffer-size (+ 1 body-size)
+            buffer-size (+ packet-type-bytes-length body-size)
             buf (.. (ByteBuffer/allocate buffer-size)
                     (put no-request-flag)
                     (put bytes)
@@ -157,7 +158,6 @@
     (onWebSocketBinary [this bytes offset len]
       (async/put! read-ch [bytes offset len]))
     (onWebSocketError [this cause]
-      (println "on server error" cause)
       (async/put! error-ch cause))
     (onWebSocketClose [this status-code reason]
       (async/put! connect-ch [status-code reason]))))
