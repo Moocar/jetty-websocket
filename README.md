@@ -1,6 +1,4 @@
-# Clojure Jetty Websockets
-
-## jetty-websocket
+# jetty-websocket
 
 jetty-websocket is a clojure wrapper around [Jetty Websockets](http://www.eclipse.org/jetty/documentation/9.1.5.v20140505/jetty-websocket-server-api.html) that uses [clojure core.async](https://github.com/clojure/core.async) channels as the primary abstraction for both connections and requests.
 
@@ -15,38 +13,35 @@ It is **very experimental**
 
 ### The Bad
 
-- clojurescript. Currently this is a jetty wrapper only
-- support text (currently)
+- No clojurescript. Currently this is a jetty wrapper only
+- No text support. Binary only (currently)
 - no ring support
-- multi-tenenacy. (but this can be added manually)
+- no multi-tenenacy. E.g both HTTP and websocket server (but this can be added manually)
 
 ### The Ugly
 
-- Since RPC is built on top, the server and client are closely coupled
+- Since RPC is built on top, the server and client are closely coupled. Unavoidable
 
 ## Why create another library?
 
-Why create yet another websocket library? I decided to go down this
-route because none of the other libraries I've found have ticked all
-the boxes I need, plus I wanted to the concept of a websocket server
-__as a transducer__.
+I decided to go down this route because none of the other libraries
+I've found have ticked all the boxes I need, plus I wanted to explore
+the concept of a websocket server __as a transducer__.
 
 This library is heavily influenced by [jetty9-websockets-async](https://github.com/ToBeReplaced/jetty9-websockets-async) especially by the concept of connection maps.
 
-If you want a clojurescript/http-kit solution that just works and has some great features, [sente](https://github.com/ptaoussanis/sente) is a good solution.
+If you want a clojurescript/http-kit solution that just works and has some great features, check out [sente](https://github.com/ptaoussanis/sente).
 
 ## Usage
 
 ### Server
 
-To create a server, you need to create a config map, which is used to construct a server instance, and then you start the server. I highly recommend wrappig this with [component](https://github.com/stuartsierra/component) in your own code.
-
-The config map requires a port and a handler-xf. Handler-xf is a transducer responsible for handling requests from clients. Its input is the raw request. Should you want to return a response, you must return the same request map with `:response-bytes` on as well.
+The main server concept is a handler-xf, a transducer responsible for handling requests from clients. Its input is the raw request. Should you want to return a response, you must return the same request map with `:response-bytes` on as well.
 
 A request map has the following keys:
 
 - `:conn` - The underlying connection map for this client. See below
-- `:body-bytes` - A triple containing the request bytes payload. In the form `[bytes offset len]`
+- `:body-bytes` - A vector containing the request bytes payload. In the form `[bytes offset len]`
 - `:request-id` - optional. Present if the requester is expecting a response
 
 A connection map has the following important keys. Others such as `:read-ch` `:write-ch` etc are implementation details:
@@ -92,7 +87,7 @@ As a client, the core abstraction is the connection map's `:send-ch`. It takes r
 (def client (client/start (client/new-websocket-client client-config)))
 
 
-;;; Send a request with expecting a response
+;;; Send a request that doesn't expect a response
 
 (require '[clojure.core.async :as async :refer [<!!]])
 
@@ -106,8 +101,21 @@ As a client, the core abstraction is the connection map's `:send-ch`. It takes r
   (println "response" (<!! response-ch)))
 
 
-;;; Shut it all down
+;;; Shut it all down (will block until all requests have finished processing)
 
 (def client (client/stop client))
 (def server (server/stop server))
 ```
+
+## Recommendations
+
+### Component
+
+I highly recommend wrappig the server/client with [component](https://github.com/stuartsierra/component)
+
+### Channels and Bytes
+
+jetty-websocket only supports binary messages, not text, and all APIs boild down to connections. I did this because it is the most open. For example, if you wanted to send and receive clojure data structures via transit, it's trivial to add readers/writers to the handler transducer and request channels.
+
+
+
