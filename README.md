@@ -1,8 +1,60 @@
 # Clojure Jetty Websockets
 
-## Example
+## jetty-websocket
 
-Create a handler transducer. Here's an echo example
+jetty-websocket is a clojure wrapper around [Jetty Websockets](http://www.eclipse.org/jetty/documentation/9.1.5.v20140505/jetty-websocket-server-api.html) that uses [clojure core.async](https://github.com/clojure/core.async) channels as the primary abstraction for both connections and requests.
+
+It is **very experimental**
+
+### The Good
+
+- A request/response layer (RPC) built in
+- request handlers are transducers
+- gracefull shutdown (wait for all requests to finish processing)
+- Sending requests is modelled purely on channels. Very open.
+
+### The Bad
+
+- clojurescript. Currently this is a jetty wrapper only
+- support text (currently)
+- no ring support
+- multi-tenenacy. (but this can be added manually)
+
+### The Ugly
+
+- Since RPC is built on top, the server and client are closely coupled
+
+## Why create another library?
+
+Why create yet another websocket library? I decided to go down this
+route because none of the other libraries I've found have ticked all
+the boxes I need, plus I wanted to the concept of a websocket server
+__as a transducer__.
+
+This library is heavily influenced by [jetty9-websockets-async](https://github.com/ToBeReplaced/jetty9-websockets-async) especially by the concept of connection maps.
+
+If you want a clojurescript/http-kit solution that just works and has some great features, [sente](https://github.com/ptaoussanis/sente) is a good solution.
+
+## Usage
+
+### Server
+
+To create a server, you need to create a config map, which is used to construct a server instance, and then you start the server. I highly recommend wrappig this with [component](https://github.com/stuartsierra/component) in your own code.
+
+The config map requires a port and a handler-xf. Handler-xf is a transducer responsible for handling requests from clients. Its input is the raw request. Should you want to return a response, you must return the same request map with `:response-bytes` on as well.
+
+A request map has the following keys:
+
+- `:conn` - The underlying connection map for this client. See below
+- `:body-bytes` - A triple containing the request bytes payload. In the form `[bytes offset len]`
+- `:request-id` - optional. Present if the requester is expecting a response
+
+A connection map has the following important keys. Others such as `:read-ch` `:write-ch` etc are implementation details:
+
+- `:send-ch` - A channel for sending requests to the other side of the connection. See client details below
+- `:error-ch` - Websocket-level errors are put here
+
+Here's an example of a handler transducer that echoes back any bytes it receives:
 
 ```clojure
 (defn echo-handler []
@@ -10,40 +62,52 @@ Create a handler transducer. Here's an echo example
          (assoc request :response-bytes (:body-bytes request)))))
 ```
 
-Now create a server and start it
+If `:response-bytes` is present (`[bytes offset len]`), jetty-websocket will ensure that they are sent as a response back to the client.
+
+### Requests
+
+As a client, the core abstraction is the connection map's `:send-ch`. It takes requests and sends them to the other side of the connection. a request is a vector of two values, request-bytes and an optional response-ch. If the response-ch is included, the other side of the connection is notified that the requester is expecting a response.
+
+### Full example
 
 ```clojure
+
+;;; Create Server
+
 (require '[me.moocar.jetty.websocket.server :as server])
-(def config
+
+(def server-config
   {:port 8080
    :handler-xf (echo-handler)})
-(def server (server/new-websocket-server config))
-(def server (server/start server))
+(def server (server/start (server/new-websocket-server server-config)))
 
-;; When ready, to close:
-(def server (server/stop server))
-```
 
-And the jetty client:
+;;; Create client:
 
-```clojure
 (require '[me.moocar.jetty.websocket.client :as client])
-(def config
+
+(def client-config
   {:port 8080
    :hostname "localhost"})
-(def client (client/new-websocket-client config))
-(def client (client/start client))
+(def client (client/start (client/new-websocket-client client-config)))
 
-;; When ready to stop
-(def client (client/stop client))
-```
 
-And to send requests:
+;;; Send a request with expecting a response
 
-```clojure
 (require '[clojure.core.async :as async :refer [<!!]])
+
 (def request-bytes (byte-array (map byte [1 2 3 4])))
+(async/put! (:send-ch (:conn client)) [request-bytes])
+
+;;; Send a request expecting a response
+
 (let [response-ch (async/chan 1)]
   (async/put! (:send-ch (:conn client)) [request-bytes response-ch])
   (println "response" (<!! response-ch)))
+
+
+;;; Shut it all down
+
+(def client (client/stop client))
+(def server (server/stop server))
 ```
