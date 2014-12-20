@@ -167,4 +167,4 @@
          (:handler-xf config)
          (or (not (contains? config :new-conn-f))
              (fn? (:new-conn-f config)))]}
-  (merge {:port (:port config)}))
+  config)

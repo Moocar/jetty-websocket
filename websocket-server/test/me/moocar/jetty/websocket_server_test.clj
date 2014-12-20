@@ -1,11 +1,15 @@
 (ns me.moocar.jetty.websocket-server-test
   (:require [clojure.test :refer :all]
             [clojure.core.async :as async :refer [<!!]]
-            [me.moocar.async :as moo-async]
-            [me.moocar.transport :as transport]
             [me.moocar.jetty.websocket.server :as websocket-server]
             [me.moocar.jetty.websocket.client :as websocket-client])
   (:import (java.util Arrays)))
+
+(defn send-request
+  [send-ch request]
+  (let [response-ch (async/chan 1)]
+    (async/put! send-ch [request response-ch])
+    response-ch))
 
 (defn local-config []
   {:port 8084
@@ -20,8 +24,8 @@
 
 (defn start-server [config handler-xf]
   (websocket-server/start
-   (assoc (websocket-server/new-websocket-server config)
-     :handler-xf handler-xf)))
+   (websocket-server/new-websocket-server (assoc config
+                                                 :handler-xf handler-xf))))
 
 (defn start-client [config]
   (websocket-client/start
@@ -39,7 +43,7 @@
       (let [client (start-client config)
             request (byte-array (map byte [1 2 3 4]))]
         (try
-          (let [response (<!! (moo-async/request (:send-ch client) request))]
+          (let [response (<!! (send-request (:send-ch client) request))]
             (is (= (seq request) (seq (to-bytes (:body-bytes response))))))
           (async/put! (:send-ch client) [request])
           (finally
@@ -50,9 +54,7 @@
 (defn waiting-handler
   [wait-ch]
   (keep (fn [request]
-          (println "waiting for wait ch")
           (<!! wait-ch)
-          (println "wait ch finished")
           (assoc request :response-bytes [(byte-array [(byte 1)]) 0 1]))))
 
 (deftest t-shutdown-before-finished
@@ -64,7 +66,7 @@
       (let [client (start-client config)
             request (byte-array (map byte [1 2 3 4]))]
         (try
-          (let [response-ch (moo-async/request (:send-ch client) request)
+          (let [response-ch (send-request (:send-ch client) request)
                 _ (Thread/sleep 10)
                 server-stopped-ch (async/thread (websocket-server/stop server))
                 throw-ch (async/chan 1)]
