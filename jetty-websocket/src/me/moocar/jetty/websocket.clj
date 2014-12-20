@@ -30,6 +30,44 @@
   8)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ## Custom transforms
+
+(defn custom-request
+  "Returns a function that takes a request and assoc's the result
+  of (from-bytes (:body-bytes request)) back onto the request
+  as :body"
+  [from-bytes]
+  (fn [request]
+    (let [[bytes offset len] (:body-bytes request)]
+      (assoc request
+             :body (from-bytes bytes offset len)))))
+
+(defn custom-response
+  "Returns a function that takes a request, and returns it with the
+  result of (to-bytes (:response request)) assoced onto the request
+  as :response-bytes"
+  [to-bytes]
+  (fn [request]
+    (if-let [response (:response request)]
+      (let [response-bytes (to-bytes response)]
+        (assoc request
+               :response-bytes [response-bytes 0 (alength response-bytes)]))
+      request)))
+
+(defn custom-send
+  "Returns a function that takes send-ch args [[request response-ch]]
+  and returns a new set of args where request is converted to bytes
+  using from-bytes, and response-ch is a transduced channel that uses
+  to-bytes to convert eventual responses back to bytes"
+  [from-bytes to-bytes]
+  (fn [[request response-ch]]
+    [(to-bytes request)
+     (when response-ch
+       (let [bytes->ch (async/chan 1 (map (custom-request from-bytes)))]
+         (async/pipe bytes->ch response-ch)
+         bytes->ch))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ## Sending
 
 (defn- write-callback

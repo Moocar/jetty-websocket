@@ -97,24 +97,6 @@
   (let [reader (transit/reader (java.io.ByteArrayInputStream. bytes offset len) :json)]
     (transit/read reader)))
 
-(defn transit-request [request]
-  (let [[bytes offset len] (:body-bytes request)]
-    (assoc request
-           :body (bytes->clj bytes offset len))))
-
-(defn transit-response [request]
-  (let [clj (:response request)
-        response-bytes (clj->bytes clj)]
-    (assoc request
-           :response-bytes [response-bytes 0 (alength response-bytes)])))
-
-(defn transit-send [[request response-ch]]
-  [(clj->bytes request)
-   (when response-ch
-     (let [bytes->clj-ch (async/chan 1 (map transit-request))]
-       (async/pipe bytes->clj-ch response-ch)
-       bytes->clj-ch))])
-
 (defn new-transit-conn []
   (assoc (websocket/make-connection-map)
          :send-ch (async/chan 1 (map transit-send))))
@@ -127,9 +109,9 @@
 (deftest t-transit
   (let [config (local-config)
         handler-xf (transit-echo-handler)
-        server (start-server config (comp (map transit-request)
+        server (start-server config (comp (map (websocket/custom-request bytes->clj))
                                           handler-xf
-                                          (keep transit-response)))]
+                                          (keep (websocket/custom-response clj->bytes))))]
     (try
       (let [client (start-client (assoc config
                                         :new-conn-f new-transit-conn))
