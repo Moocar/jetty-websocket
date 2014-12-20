@@ -4,13 +4,14 @@
   (:import (java.nio ByteBuffer)
            (org.eclipse.jetty.server Server ServerConnector)
            (org.eclipse.jetty.websocket.server WebSocketHandler)
-           (org.eclipse.jetty.websocket.servlet WebSocketCreator)))
+           (org.eclipse.jetty.websocket.servlet WebSocketCreator
+                                                WebSocketServletFactory)))
 
 (defn- websocket-handler 
   "WebSocketHandler that creates creator. Boilerplate"
   [creator]
   (proxy [WebSocketHandler] []
-    (configure [factory]
+    (configure [^WebSocketServletFactory factory]
       (.setCreator factory creator))))
 
 (defn- response-buf
@@ -135,7 +136,10 @@
   Then waits for all in flight requests to finish and finally closes
   the underlying jetty server. Returns immediately if server has
   already been stopped."
-  [{:keys [server connector request-listener request-ch] :as this}]
+  [{:keys [^Server server
+           ^ServerConnector connector
+           request-listener
+           request-ch] :as this}]
   (if server
     (do
       (.close connector)

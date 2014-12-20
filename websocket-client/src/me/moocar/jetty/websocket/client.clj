@@ -41,7 +41,7 @@
 
 (defn stop
   "Immediately stops the client and closes the underlying connection."
-  [{:keys [client] :as this}]
+  [{:keys [^WebSocketClient client] :as this}]
   (if client
     (do
       (.stop client)

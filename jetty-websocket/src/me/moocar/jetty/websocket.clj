@@ -1,7 +1,8 @@
 (ns me.moocar.jetty.websocket
   (:require [clojure.core.async :as async :refer [go <!]])
   (:import (java.nio ByteBuffer)
-           (org.eclipse.jetty.websocket.api WebSocketListener Session WriteCallback)))
+           (org.eclipse.jetty.websocket.api WebSocketListener Session
+                                            WriteCallback RemoteEndpoint)))
 
 (def ^:const request-flag
   "Byte flag placed at the beginning of a packet to indicate the next
@@ -45,7 +46,7 @@
   "Sends bytes to remote-endpoint asynchronously and returns a channel
   that will close once successful or have an exception put onto it in
   the case of an error"
-  [remote-endpoint byte-buffer]
+  [^RemoteEndpoint remote-endpoint byte-buffer]
   {:pre [remote-endpoint byte-buffer]}
   (let [response-ch (async/chan)]
     (try
@@ -75,7 +76,7 @@
   and returns a byte buffer that contains the packet-type, request-id
   and body bytes"
   [{:keys [request-id-seq-atom] :as conn}]
-  (fn [[bytes response-ch]]
+  (fn [[^bytes bytes response-ch]]
     (if response-ch
       (let [request-id (swap! request-id-seq-atom inc)
             body-size (alength bytes)
@@ -224,7 +225,7 @@
 
           write-ch
           ([buf]
-             (send-bytes! (.getRemote session) buf)
+             (send-bytes! (.getRemote ^Session session) buf)
              (recur))
           
           connect-ch
