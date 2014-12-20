@@ -8,5 +8,6 @@
                  [me.moocar/jetty-websocket "0.1.0-SNAPSHOT"]
                  [org.eclipse.jetty.websocket/websocket-server "9.3.0.M1"]]
   :profiles {:dev {:dependencies
-                   [[me.moocar.jetty-websocket/websocket-client
+                   [[com.cognitect/transit-clj "0.8.259"]
+                    [me.moocar.jetty-websocket/websocket-client
                      "0.1.0-SNAPSHOT"]]}})

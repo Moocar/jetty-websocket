@@ -1,8 +1,10 @@
 (ns me.moocar.jetty.websocket-server-test
   (:require [clojure.test :refer :all]
             [clojure.core.async :as async :refer [<!!]]
-            [me.moocar.jetty.websocket.server :as websocket-server]
-            [me.moocar.jetty.websocket.client :as websocket-client])
+            [cognitect.transit :as transit]
+            [me.moocar.jetty.websocket :as websocket]
+            [me.moocar.jetty.websocket.client :as websocket-client]
+            [me.moocar.jetty.websocket.server :as websocket-server])
   (:import (java.util Arrays)))
 
 (defn send-request
@@ -77,6 +79,66 @@
             (let [response (<!! response-ch)]
               (is (= [(byte 1)] (seq (to-bytes (:body-bytes response)))))
               (async/thread (websocket-server/stop server))))
+          (finally
+            (websocket-client/stop client))))
+      (finally
+        (websocket-server/stop server)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ## Transit
+
+(defn clj->bytes [clj]
+  (let [out (java.io.ByteArrayOutputStream.)
+        writer (transit/writer out :json)]
+    (transit/write writer clj)
+    (.toByteArray out)))
+
+(defn bytes->clj [bytes offset len]
+  (let [reader (transit/reader (java.io.ByteArrayInputStream. bytes offset len) :json)]
+    (transit/read reader)))
+
+(defn transit-request [request]
+  (let [[bytes offset len] (:body-bytes request)]
+    (assoc request
+           :body (bytes->clj bytes offset len))))
+
+(defn transit-response [request]
+  (let [clj (:response request)
+        response-bytes (clj->bytes clj)]
+    (assoc request
+           :response-bytes [response-bytes 0 (alength response-bytes)])))
+
+(defn transit-send [[request response-ch]]
+  [(clj->bytes request)
+   (when response-ch
+     (let [bytes->clj-ch (async/chan 1 (map transit-request))]
+       (async/pipe bytes->clj-ch response-ch)
+       bytes->clj-ch))])
+
+(defn new-transit-conn []
+  (assoc (websocket/make-connection-map)
+         :send-ch (async/chan 1 (map transit-send))))
+
+(defn transit-echo-handler []
+  (keep (fn [{:keys [request-id body] :as request}]
+          (when request-id
+            (assoc request :response body)))))
+
+(deftest t-transit
+  (let [config (local-config)
+        handler-xf (transit-echo-handler)
+        server (start-server config (comp (map transit-request)
+                                          handler-xf
+                                          (keep transit-response)))]
+    (try
+      (let [client (start-client (assoc config
+                                        :new-conn-f new-transit-conn))
+            send-ch (:send-ch (:conn client))
+            request {:this-is-my [:request]}]
+        (try
+          (let [response (<!! (send-request send-ch request))]
+            (is (= request (:body response))))
+          (async/put! send-ch [request])
           (finally
             (websocket-client/stop client))))
       (finally

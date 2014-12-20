@@ -16,12 +16,12 @@
   websocket-client with a :conn (websocket connection-map). Blocks
   until connection has been established. Returns immediately if this
   client has already been started"
-  [{:keys [client request-ch] :as this}]
+  [{:keys [client new-conn-f request-ch] :as this}]
   (if client
     client
     (let [client (WebSocketClient.)
           uri (make-uri this)
-          conn (websocket/make-connection-map)
+          conn ((or new-conn-f websocket/make-connection-map))
           listener (websocket/listener conn)]
       (websocket/start-send-pipeline conn)
       (websocket/connection-lifecycle conn request-ch)
