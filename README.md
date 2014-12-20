@@ -90,14 +90,15 @@ As a client, the core abstraction is the connection map's `:send-ch`. It takes r
 ;;; Send a request that doesn't expect a response
 
 (require '[clojure.core.async :as async :refer [<!!]])
+(def send-ch (:send-ch (:conn client)))
 
 (def request-bytes (byte-array (map byte [1 2 3 4])))
-(async/put! (:send-ch (:conn client)) [request-bytes])
+(async/put! send-ch [request-bytes])
 
 ;;; Send a request expecting a response
 
 (let [response-ch (async/chan 1)]
-  (async/put! (:send-ch (:conn client)) [request-bytes response-ch])
+  (async/put! send-ch [request-bytes response-ch])
   (println "response" (<!! response-ch)))
 
 
