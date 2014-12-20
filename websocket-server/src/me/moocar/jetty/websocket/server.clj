@@ -14,30 +14,6 @@
     (configure [^WebSocketServletFactory factory]
       (.setCreator factory creator))))
 
-(defn- response-buf
-  "Extracts response-bytes out of request and converts into a
-  ByteBuffer in the form of
-
-  [response-flag request-id & bytes]
-        ^             ^         ^
-        |             |         |
-     1 byte      8 byte long   rest
-
-  If for some reason there is no `:response-bytes` in the request,
-  returns nil"
-  [{:keys [response-bytes request-id] :as request}]
-  (when response-bytes
-    (let [[bytes offset len] response-bytes
-          buf-size (+ websocket/packet-type-bytes-length
-                      websocket/request-id-bytes-length
-                      len)
-          buf (.. (ByteBuffer/allocate buf-size)
-                  (put websocket/response-flag)
-                  (putLong request-id)
-                  (put bytes offset len)
-                  (rewind))]
-      buf)))
-
 (defn- send-to-write-ch
   "When request contains a :response-bytes, converts them into a
   ByteBuffer and puts onto the requets's connection's write-ch"

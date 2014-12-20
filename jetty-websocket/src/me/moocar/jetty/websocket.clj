@@ -100,9 +100,7 @@
 (defn- add-response-ch
   "Adds a response-ch for the request id. After 10 seconds, closes the
   ch and removes it from the set"
-  [{:keys [response-chans-atom] :as conn}
-   request-id
-   response-ch]
+  [response-chans-atom request-id response-ch]
   (swap! response-chans-atom assoc request-id response-ch)
   (async/take! (async/timeout 10000)
                (fn [_]
@@ -113,7 +111,7 @@
   "Returns a function that takes a vector of bytes and response-ch,
   and returns a byte buffer that contains the packet-type, request-id
   and body bytes"
-  [{:keys [request-id-seq-atom] :as conn}]
+  [request-id-seq-atom response-chans-atom]
   (fn [[^bytes bytes response-ch]]
     (if response-ch
       (let [request-id (swap! request-id-seq-atom inc)
@@ -126,7 +124,7 @@
                     (putLong request-id)
                     (put bytes)
                     (rewind))]
-        (add-response-ch conn request-id response-ch)
+        (add-response-ch response-chans-atom request-id response-ch)
         buf)
       (let [body-size (alength bytes)
             buffer-size (+ packet-type-bytes-length body-size)
@@ -136,15 +134,36 @@
                     (rewind))]
         buf))))
 
+(defn- response-buf
+  "Extracts response-bytes out of request and converts into a
+  ByteBuffer in the form of
+
+  [response-flag request-id & bytes]
+        ^             ^         ^
+        |             |         |
+     1 byte      8 byte long   rest
+
+  If for some reason there is no `:response-bytes` in the request,
+  returns nil"
+  [{:keys [response-bytes request-id] :as request}]
+  (when response-bytes
+    (let [[bytes offset len] response-bytes
+          buf-size (+ packet-type-bytes-length
+                      request-id-bytes-length
+                      len)
+          buf (.. (ByteBuffer/allocate buf-size)
+                  (put response-flag)
+                  (putLong request-id)
+                  (put bytes offset len)
+                  (rewind))]
+      buf)))
+
 (defn start-send-pipeline
   "Starts a pipeline that listens for new requests on a connection's
   send-ch, turns them into request bufs and outputs them to the
   connection's write-ch"
   [conn]
-  (async/pipeline 1
-                  (:write-ch conn)
-                  (map (request-buf conn))
-                  (:send-ch conn)))
+  (async/pipe (:send-ch conn) (:write-ch conn)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Websocket connections
@@ -175,14 +194,18 @@
 
   request-id-seq-atom - Every new request has an incremented sequence
   ID. This is the atomic store"
-  []
-  {:connect-ch (async/chan 2)
-   :send-ch (async/chan 1)
-   :read-ch (async/chan 1024)
-   :write-ch (async/chan 1024)
-   :error-ch (async/chan 1024)
-   :response-chans-atom (atom {})
-   :request-id-seq-atom (atom 0)})
+  ([] (make-connection-map (map identity)))
+  ([send-xf]
+   (let [request-id-seq-atom (atom 0)
+         response-chans-atom (atom {})]
+     {:connect-ch (async/chan 2)
+      :send-ch (async/chan 1 (comp send-xf
+                                   (map (request-buf request-id-seq-atom response-chans-atom))))
+      :read-ch (async/chan 1024)
+      :write-ch (async/chan 1024)
+      :error-ch (async/chan 1024)
+      :response-chans-atom response-chans-atom
+      :request-id-seq-atom request-id-seq-atom})))
 
 (defn listener
   "Returns a websocket listener that does nothing but put connections,
@@ -222,7 +245,7 @@
   of :conn :body-bytes ([bytes offset len]) and a request-id for
   request or response packets"
   [request-ch
-   {:keys [read-ch response-chans-atom] :as conn}
+   {:keys [response-chans-atom] :as conn}
    [bytes offset len]]
   (let [buf (ByteBuffer/wrap bytes offset len)
         packet-type (.get buf)
