@@ -51,8 +51,7 @@
 (defn default-conn-f
   "Creates a default connection map"
   [request]
-  (let [send-ch (async/chan 1)]
-    (websocket/make-connection-map send-ch)))
+  (websocket/make-connection-map))
 
 (defn- create-websocket
   "Returns a function that is invoked when a new websocket connection
@@ -106,7 +105,7 @@
   on.
 
   new-conn-f: a function that takes the original HTTP upgrading
-  request and returns a connection map. Defaults to default-conn-f
+  request and returns a connection map. Optional
 
   If server has already been started, immediately returns"
   [{:keys [port new-conn-f handler-xf server] :as websocket-server}]

@@ -137,9 +137,9 @@
 
   request-id-seq-atom - Every new request has an incremented sequence
   ID. This is the atomic store"
-  [send-ch]
+  []
   {:connect-ch (async/chan 2)
-   :send-ch send-ch
+   :send-ch (async/chan 1)
    :read-ch (async/chan 1024)
    :write-ch (async/chan 1024)
    :error-ch (async/chan 1024)

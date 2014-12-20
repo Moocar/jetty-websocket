@@ -6,13 +6,8 @@
 (defn- make-uri
   "Creates the full uri using hostname, port and websocket scheme and
   path"
-  [{:keys [hostname port websockets] :as this}]
-  (let [{:keys [scheme path]} websockets
-        uri-string (format "%s://%s:%s%s"
-                           (name scheme)
-                           hostname
-                           port
-                           path)]
+  [{:keys [hostname port] :as this}]
+  (let [uri-string (format "ws://%s:%s" hostname port)]
     (URI. uri-string)))
 
 (defn start
@@ -21,13 +16,12 @@
   websocket-client with a :conn (websocket connection-map). Blocks
   until connection has been established. Returns immediately if this
   client has already been started"
-  [{:keys [client request-ch send-ch] :as this}]
+  [{:keys [client request-ch] :as this}]
   (if client
     client
     (let [client (WebSocketClient.)
           uri (make-uri this)
-          conn (assoc (websocket/make-connection-map send-ch)
-                 :request-ch request-ch)
+          conn (websocket/make-connection-map)
           listener (websocket/listener conn)]
       (websocket/start-send-pipeline conn)
       (websocket/connection-lifecycle conn request-ch)
@@ -35,7 +29,8 @@
       (if (deref (.connect client listener uri) 1000 nil)
         (assoc this
           :client client
-          :conn conn)
+          :conn conn
+          :request-ch request-ch)
         (throw (ex-info "Failed to connect"
                         this))))))
 

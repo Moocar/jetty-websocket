@@ -13,9 +13,7 @@
 
 (defn local-config []
   {:port 8084
-   :hostname "localhost"
-   :websockets {:scheme :ws
-                :path "/ws"}})
+   :hostname "localhost"})
 
 (defn echo-handler []
   (keep (fn [{:keys [request-id body-bytes] :as request}]
@@ -29,8 +27,7 @@
 
 (defn start-client [config]
   (websocket-client/start
-   (assoc (websocket-client/new-websocket-client config)
-     :send-ch (async/chan 1))))
+   (websocket-client/new-websocket-client config)))
 
 (defn to-bytes [[bytes offset len]]
   (Arrays/copyOfRange bytes offset (+ offset len)))
@@ -43,9 +40,9 @@
       (let [client (start-client config)
             request (byte-array (map byte [1 2 3 4]))]
         (try
-          (let [response (<!! (send-request (:send-ch client) request))]
+          (let [response (<!! (send-request (:send-ch (:conn client)) request))]
             (is (= (seq request) (seq (to-bytes (:body-bytes response))))))
-          (async/put! (:send-ch client) [request])
+          (async/put! (:send-ch (:conn client)) [request])
           (finally
             (websocket-client/stop client))))
       (finally
@@ -66,7 +63,7 @@
       (let [client (start-client config)
             request (byte-array (map byte [1 2 3 4]))]
         (try
-          (let [response-ch (send-request (:send-ch client) request)
+          (let [response-ch (send-request (:send-ch (:conn client)) request)
                 _ (Thread/sleep 10)
                 server-stopped-ch (async/thread (websocket-server/stop server))
                 throw-ch (async/chan 1)]
