@@ -1,14 +1,10 @@
 (ns me.moocar.jetty.websocket.server
-  (:require [clojure.core.async :as async :refer [go go-loop <! >!! <!!]]
+  (:require [clojure.core.async :as async :refer [<!!]]
             [me.moocar.jetty.websocket :as websocket])
   (:import (java.nio ByteBuffer)
            (org.eclipse.jetty.server Server ServerConnector)
-           (org.eclipse.jetty.websocket.api WebSocketListener WriteCallback)
            (org.eclipse.jetty.websocket.server WebSocketHandler)
            (org.eclipse.jetty.websocket.servlet WebSocketCreator)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Websocket connections
 
 (defn- websocket-handler 
   "WebSocketHandler that creates creator. Boilerplate"
@@ -17,20 +13,33 @@
     (configure [factory]
       (.setCreator factory creator))))
 
-(defn response-buf
-  "Sends a response for request-id on connection"
+(defn- response-buf
+  "Extracts response-bytes out of request and converts into a
+  ByteBuffer in the form of
+
+  [response-flag request-id & bytes]
+        ^             ^         ^
+        |             |         |
+     1 byte      8 byte long   rest
+
+  If for some reason there is no `:response-bytes` in the request,
+  returns nil"
   [{:keys [response-bytes request-id] :as request}]
-  (println "request" request)
   (when response-bytes
     (let [[bytes offset len] response-bytes
-          buf (.. (ByteBuffer/allocate (+ 1 8 len))
+          buf-size (+ websocket/packet-type-bytes-length
+                      websocket/request-id-bytes-length
+                      len)
+          buf (.. (ByteBuffer/allocate buf-size)
                   (put websocket/response-flag)
                   (putLong request-id)
                   (put bytes offset len)
                   (rewind))]
       buf)))
 
-(defn send-to-write-ch
+(defn- send-to-write-ch
+  "When request contains a :response-bytes, converts them into a
+  ByteBuffer and puts onto the requets's connection's write-ch"
   [request]
   (let [{:keys [conn]} request
         {:keys [write-ch]} conn]
@@ -39,11 +48,17 @@
     nil))
 
 (defn default-conn-f
+  "Creates a default connection map"
   [request]
   (let [send-ch (async/chan 1)]
     (websocket/make-connection-map send-ch)))
 
-(defn create-websocket
+(defn- create-websocket
+  "Returns a function that is invoked when a new websocket connection
+  is accepted. The function takes the websocket creator, the HTTP
+  request and response, and starts up the send pipeline, the
+  connection lifecycle and returns the jetty listener object, required
+  by the websocket handler"
   [request-ch new-conn-f handler-xf]
   (fn [this request response]
     (let [conn (new-conn-f request)
@@ -53,19 +68,22 @@
       listener)))
 
 (defn- websocket-creator 
-  "Creates a WebSocketCreator that when a websocket is opened, waits
-  for a connection, and then passes all requests to `af`. af should be
-  an async function of 2 arguments, the first a vector of [session
-  bytes] and the second a channel to put to (ignored). Returns a
-  WebSocketListener"
+  "Returns a new WebSocketCreator that uses create-websocket-f when a
+  new websocket connection is accepted"
   [create-websocket-f]
   (reify WebSocketCreator
     (createWebSocket [this request response]
       (create-websocket-f this request response))))
 
 (defn listen-for-requests
+  "Starts a pipeilne that listens for requests on request-ch and uses
+  handler-xf to handle the request. handler-xf should be a transducer
+  that returns performs any required operations and then returns the
+  request object, possible with :response-bytes if a response should
+  be sent back to the other side of the connection"
   [request-ch handler-xf]
-  (let [to-ch (async/chan 1 (keep (fn [_] (println "out"))))]
+  ;; to-ch is a /dev/null
+  (let [to-ch (async/chan 1 (keep (constantly nil)))]
     (async/pipeline-blocking 1
                              to-ch
                              (comp handler-xf
@@ -74,9 +92,25 @@
     to-ch))
 
 (defn start
-  [{:keys [port new-conn-f handler-xf server] :as this}]
+  "Starts up a Jetty Server that does nothing but handle websockets.
+  Takes the following options:
+
+  port: The port the server should bind to
+
+  handler-xf: A transducer for handling requests. Input is a request
+  map of :conn (connection map), :body-bytes ([bytes offest len])
+  and :request-id (long). If a response should be sent back to the
+  other side of the connection, the transducer should put request
+  object onto result with :response-bytes ([bytes offset len]) assoc'd
+  on.
+
+  new-conn-f: a function that takes the original HTTP upgrading
+  request and returns a connection map. Defaults to default-conn-f
+
+  If server has already been started, immediately returns"
+  [{:keys [port new-conn-f handler-xf server] :as websocket-server}]
   (if server
-    this
+    websocket-server
     (let [server (Server.)
           connector (doto (ServerConnector. server)
                       (.setPort port))
@@ -89,27 +123,48 @@
       (.addConnector server connector)
       (.setHandler server ws-handler)
       (.start server)
-      (assoc this
+      (assoc websocket-server
         :server server
         :request-ch request-ch
         :connector connector
         :request-listener request-listener))))
 
 (defn stop
+  "Blocks while Gracefully shutting down the server instance. First,
+  the connector is closed to ensure no new connections are accepted.
+  Then waits for all in flight requests to finish and finally closes
+  the underlying jetty server. Returns immediately if server has
+  already been stopped."
   [{:keys [server connector request-listener request-ch] :as this}]
   (if server
     (do
-      (println "shutting down connector")
       (.close connector)
-      (println "closing request ch")
       (async/close! request-ch)
-      (println "waiting for request listener")
       (<!! request-listener)
-      (println "stopping server")
       (.stop server)
       (assoc this :server nil :connector nil))
     this))
 
 (defn new-websocket-server
+  "Creates a new websocket-server (but doesn't start it). config can
+  include the following:
+
+  port: The port the server should bind to. Required
+
+  handler-xf: A transducer for handling requests. Input is a request
+  map of :conn (connection map), :body-bytes ([bytes offest len])
+  and :request-id (long). If a response should be sent back to the
+  other side of the connection, the transducer should put request
+  object onto result with :response-bytes ([bytes offset len]) assoc'd
+  on. Required.
+
+  new-conn-f: a function that takes the original HTTP upgrading
+  request and returns a connection map. Defaults to default-conn-f
+
+  If server has already been started, immediately returns"
   [config]
+  {:pre [(number? (:port config))
+         (:handler-xf config)
+         (or (not (contains? config :new-conn-f))
+             (fn? (:new-conn-f config)))]}
   (merge {:port (:port config)}))

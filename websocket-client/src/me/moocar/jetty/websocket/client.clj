@@ -1,10 +1,11 @@
 (ns me.moocar.jetty.websocket.client
-  (:require [clojure.core.async :as async :refer [go go-loop <! <!!]]
-            [me.moocar.jetty.websocket :as websocket])
+  (:require [me.moocar.jetty.websocket :as websocket])
   (:import (java.net URI)
            (org.eclipse.jetty.websocket.client WebSocketClient)))
 
 (defn- make-uri
+  "Creates the full uri using hostname, port and websocket scheme and
+  path"
   [{:keys [hostname port websockets] :as this}]
   (let [{:keys [scheme path]} websockets
         uri-string (format "%s://%s:%s%s"
@@ -15,6 +16,11 @@
     (URI. uri-string)))
 
 (defn start
+  "Starts a websocket-client. The client will attempt to connect to
+  the remote server, and if successul, will return the
+  websocket-client with a :conn (websocket connection-map). Blocks
+  until connection has been established. Returns immediately if this
+  client has already been started"
   [{:keys [client request-ch send-ch] :as this}]
   (if client
     client
@@ -34,6 +40,7 @@
                         this))))))
 
 (defn stop
+  "Immediately stops the client and closes the underlying connection."
   [{:keys [client] :as this}]
   (if client
     (do

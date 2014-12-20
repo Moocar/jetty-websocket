@@ -1,8 +1,6 @@
 (ns me.moocar.jetty.websocket
-  (:require [clojure.core.async :as async :refer [go go-loop <! >!!]]
-            [me.moocar.transport :as transport])
+  (:require [clojure.core.async :as async :refer [go <!]])
   (:import (java.nio ByteBuffer)
-           (java.io ByteArrayInputStream ByteArrayOutputStream)
            (org.eclipse.jetty.websocket.api WebSocketListener Session WriteCallback)))
 
 (def ^:const request-flag
@@ -21,6 +19,14 @@
   is a request that does not expect a response and therefore the
   request-id is not present (data begins at position 1)"
   (byte -1))
+
+(def ^:const packet-type-bytes-length
+  "Number of bytes taken up by the packet-type flag"
+  1)
+
+(def ^:const request-id-bytes-length
+  "Number of bytes taken up by the request ID"
+  8)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ## Sending
@@ -47,14 +53,13 @@
                   byte-buffer
                   (write-callback response-ch))
       (catch Throwable t
-        (println "caught an exc" t)
         (async/put! response-ch t))
       (finally
         (async/close! response-ch)))
     response-ch))
 
 (defn- add-response-ch
-  "Adds a response-ch for the request id. After 30 seconds, closes the
+  "Adds a response-ch for the request id. After 10 seconds, closes the
   ch and removes it from the set"
   [{:keys [response-chans-atom] :as conn}
    request-id
@@ -65,7 +70,7 @@
                  (async/close! response-ch)
                  (swap! response-chans-atom dissoc request-id))))
 
-(defn request-buf
+(defn- request-buf
   "Returns a function that takes a vector of bytes and response-ch,
   and returns a byte buffer that contains the packet-type, request-id
   and body bytes"
@@ -92,6 +97,9 @@
         buf))))
 
 (defn start-send-pipeline
+  "Starts a pipeline that listens for new requests on a connection's
+  send-ch, turns them into request bufs and outputs them to the
+  connection's write-ch"
   [conn]
   (async/pipeline 1
                   (:write-ch conn)
@@ -102,6 +110,31 @@
 ;; Websocket connections
 
 (defn make-connection-map
+  "Returns a connection map that contains the following
+  channels/atoms:
+
+  send-ch - Any requests put onto send-ch will be sent to the other
+  side of connection
+
+  error-ch - Any websocket level errors are put here
+
+  As well as the following, which are opaque to the library user
+
+  connect-ch - Upon a new websocket connection, the session is put
+  onto this channel. Then, when the websocket connection closes, the
+  status-code and reason are put onto the channel.
+
+  read-ch - Any incoming bytes on the connection are immediately put
+  onto this channel.
+
+  write-ch - Any ByteBuffers put onto this channel will immediately be
+  sent to the other side of the connection
+
+  response-chans-atom - a map of request-id to response-ch. When a
+  response comes back for a request, it will be put into this channel
+
+  request-id-seq-atom - Every new request has an incremented sequence
+  ID. This is the atomic store"
   [send-ch]
   {:connect-ch (async/chan 2)
    :send-ch send-ch
@@ -128,12 +161,27 @@
     (onWebSocketClose [this status-code reason]
       (async/put! connect-ch [status-code reason]))))
 
-(defn handle-read
-  "Handles new bytes coming in off connection and puts them onto
-  request-ch as a map of [:conn :body-bytes]. If the packet is a
-  request, a callback function that accepts bytes is assoc'd on
-  as :response-cb. If packet is a response to a request, the request
-  map is instead put onto the response-ch that was setup in `send!`"
+(defn- handle-read
+  "Handles new bytes coming in off connection. An incoming packet can
+  be one of 3 types (denoted by first byte):
+
+  - request: [request-id(8 byte long) body-bytes(rest of bytes)]. A
+  new request coming into this connection. Therefore the next 8 bytes
+  are the request-id. New requests are put onto request-ch
+
+  - response: [request-id(8 byte long) body-bytes(rest of bytes)]. A
+  response to a previous request that was sent. The next 8 bytes are
+  the request-id for the original outgoing request. Responses are put
+  onto the response-ch for the request-id
+
+  - no-response: [body-bytes(rest of bytes)]. A request coming into
+  this connection that does NOT expect a response. Therefore there is
+  no request-id, and the body takes up the rest of the bytes. New
+  requests are put onto request-ch
+
+  In all the above scenarios, the item put onto the channel is a map
+  of :conn :body-bytes ([bytes offset len]) and a request-id for
+  request or response packets"
   [request-ch
    {:keys [read-ch response-chans-atom] :as conn}
    [bytes offset len]]
@@ -153,16 +201,17 @@
 
 (defn connection-lifecycle
   "Starts a go loop that first waits for a connection on connect-ch,
-  then loops waiting for incoming binary packets. When a packet is
-  received, puts [session bytes] onto read-ch. Sends any byte-buffers
-  in write-ch to the client. A second message put onto connect-ch is
-  assumed to be a close signal, which ends the loop"
-  [{:keys [connect-ch read-ch write-ch] :as conn}
+  then loops waiting for incoming binary packets, converting them into
+  request objects of :conn, :body-bytes ([bytes offset len]) and
+  optional :request-id. Or if the incoming bytes are for a response,
+  sends to the appropriate response-ch. Also writes any buffers going
+  into write-ch to a the connection. Returns a channel that will close
+  once the underlying websocket connection closes"
+  [{:keys [error-ch connect-ch read-ch write-ch] :as conn}
    request-ch]
   (go
     (when-let [session (<! connect-ch)]
       (loop []
-        (println "looping")
         (async/alt!
 
           read-ch
@@ -170,19 +219,16 @@
              (try
                (handle-read request-ch conn v)
                (catch Throwable t
-                 (println "error handling read" v)
-                 (.printStackTrace t)))
+                 (async/put! error-ch t)))
              (recur))
 
           write-ch
           ([buf]
-             (println "got write" buf)
              (send-bytes! (.getRemote session) buf)
              (recur))
           
           connect-ch
           ([[status-code reason]]
-             (println "closing because" status-code reason)
              (async/close! connect-ch)))))))
 
 
