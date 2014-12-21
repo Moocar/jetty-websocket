@@ -20,7 +20,7 @@
   [request]
   (let [{:keys [conn]} request
         {:keys [write-ch]} conn]
-    (when-let [buf (response-buf request)]
+    (when-let [buf (websocket/response-buf request)]
       (async/put! write-ch buf))
     nil))
 

@@ -68,34 +68,7 @@
          bytes->ch))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; ## Sending
-
-(defn- write-callback
-  "Returns a WriteCallback that closes response-ch upon success, or
-  puts cause if failed"
-  [response-ch]
-  (reify WriteCallback
-    (writeSuccess [this]
-      (async/close! response-ch))
-    (writeFailed [this cause]
-      (async/put! response-ch cause))))
-
-(defn- send-bytes!
-  "Sends bytes to remote-endpoint asynchronously and returns a channel
-  that will close once successful or have an exception put onto it in
-  the case of an error"
-  [^RemoteEndpoint remote-endpoint byte-buffer]
-  {:pre [remote-endpoint byte-buffer]}
-  (let [response-ch (async/chan)]
-    (try
-      (.sendBytes remote-endpoint 
-                  byte-buffer
-                  (write-callback response-ch))
-      (catch Throwable t
-        (async/put! response-ch t))
-      (finally
-        (async/close! response-ch)))
-    response-ch))
+;; ## Sending/Receiving
 
 (defn- add-response-ch
   "Adds a response-ch for the request id. After 10 seconds, closes the
@@ -134,7 +107,7 @@
                     (rewind))]
         buf))))
 
-(defn- response-buf
+(defn response-buf
   "Extracts response-bytes out of request and converts into a
   ByteBuffer in the form of
 
@@ -158,15 +131,53 @@
                   (rewind))]
       buf)))
 
+(defn- handle-read
+  "Handles new bytes coming in off connection. An incoming packet can
+  be one of 3 types (denoted by first byte):
+
+  - request: [request-id(8 byte long) body-bytes(rest of bytes)]. A
+  new request coming into this connection. Therefore the next 8 bytes
+  are the request-id. New requests are put onto request-ch
+
+  - response: [request-id(8 byte long) body-bytes(rest of bytes)]. A
+  response to a previous request that was sent. The next 8 bytes are
+  the request-id for the original outgoing request. Responses are put
+  onto the response-ch for the request-id
+
+  - no-response: [body-bytes(rest of bytes)]. A request coming into
+  this connection that does NOT expect a response. Therefore there is
+  no request-id, and the body takes up the rest of the bytes. New
+  requests are put onto request-ch
+
+  In all the above scenarios, the item put onto the channel is a map
+  of :conn :body-bytes ([bytes offset len]) and a request-id for
+  request or response packets"
+  [request-ch conn buf]
+  (let [{:keys [response-chans-atom]} conn
+        packet-type (.get buf)
+        request-id (when-not (= no-request-flag packet-type)
+                     (.getLong buf))
+        body-bytes [(.array buf)
+                    (+ (.arrayOffset buf) (.position buf))
+                    (.remaining buf)]
+        to-ch (if (= response-flag packet-type)
+                (get @response-chans-atom request-id)
+                request-ch)
+        request (cond-> {:conn conn
+                         :body-bytes body-bytes}
+                        (= packet-type request-flag)
+                        (assoc :request-id request-id))]
+    (async/put! to-ch request)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Websockets
+
 (defn start-send-pipeline
   "Starts a pipeline that listens for new requests on a connection's
   send-ch, turns them into request bufs and outputs them to the
   connection's write-ch"
   [conn]
   (async/pipe (:send-ch conn) (:write-ch conn)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Websocket connections
 
 (defn make-connection-map
   "Returns a connection map that contains the following
@@ -223,43 +234,32 @@
     (onWebSocketClose [this status-code reason]
       (async/put! connect-ch [status-code reason]))))
 
-(defn- handle-read
-  "Handles new bytes coming in off connection. An incoming packet can
-  be one of 3 types (denoted by first byte):
+(defn- write-callback
+  "Returns a WriteCallback that closes response-ch upon success, or
+  puts cause if failed"
+  [response-ch]
+  (reify WriteCallback
+    (writeSuccess [this]
+      (async/close! response-ch))
+    (writeFailed [this cause]
+      (async/put! response-ch cause))))
 
-  - request: [request-id(8 byte long) body-bytes(rest of bytes)]. A
-  new request coming into this connection. Therefore the next 8 bytes
-  are the request-id. New requests are put onto request-ch
-
-  - response: [request-id(8 byte long) body-bytes(rest of bytes)]. A
-  response to a previous request that was sent. The next 8 bytes are
-  the request-id for the original outgoing request. Responses are put
-  onto the response-ch for the request-id
-
-  - no-response: [body-bytes(rest of bytes)]. A request coming into
-  this connection that does NOT expect a response. Therefore there is
-  no request-id, and the body takes up the rest of the bytes. New
-  requests are put onto request-ch
-
-  In all the above scenarios, the item put onto the channel is a map
-  of :conn :body-bytes ([bytes offset len]) and a request-id for
-  request or response packets"
-  [request-ch
-   {:keys [response-chans-atom] :as conn}
-   [bytes offset len]]
-  (let [buf (ByteBuffer/wrap bytes offset len)
-        packet-type (.get buf)
-        request-id (when-not (= no-request-flag packet-type)
-                     (.getLong buf))
-        body-bytes [bytes (+ offset (.position buf)) (- len (.position buf))]
-        to-ch (if (= response-flag packet-type)
-                (get @response-chans-atom request-id)
-                request-ch)
-        request (cond-> {:conn conn
-                         :body-bytes body-bytes}
-                        (= packet-type request-flag)
-                        (assoc :request-id request-id))]
-    (async/put! to-ch request)))
+(defn- send-bytes!
+  "Sends bytes to remote-endpoint asynchronously and returns a channel
+  that will close once successful or have an exception put onto it in
+  the case of an error"
+  [^RemoteEndpoint remote-endpoint byte-buffer]
+  {:pre [remote-endpoint byte-buffer]}
+  (let [response-ch (async/chan)]
+    (try
+      (.sendBytes remote-endpoint
+                  byte-buffer
+                  (write-callback response-ch))
+      (catch Throwable t
+        (async/put! response-ch t))
+      (finally
+        (async/close! response-ch)))
+    response-ch))
 
 (defn connection-lifecycle
   "Starts a go loop that first waits for a connection on connect-ch,
@@ -277,9 +277,10 @@
         (async/alt!
 
           read-ch
-          ([v]
+          ([[bytes offset len]]
              (try
-               (handle-read request-ch conn v)
+               (handle-read request-ch conn
+                            (ByteBuffer/wrap bytes offset len))
                (catch Throwable t
                  (async/put! error-ch t)))
              (recur))
