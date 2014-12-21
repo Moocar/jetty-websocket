@@ -1,5 +1,7 @@
 (ns me.moocar.jetty.websocket.client
-  (:require [me.moocar.jetty.websocket :as websocket])
+  (:require [clojure.core.async :as async]
+            [me.moocar.comms-async :as comms]
+            [me.moocar.jetty.websocket :as websocket])
   (:import (java.net URI)
            (org.eclipse.jetty.websocket.client WebSocketClient)))
 
@@ -23,7 +25,8 @@
           uri (make-uri this)
           conn ((or new-conn-f websocket/make-connection-map))
           listener (websocket/listener conn)]
-      (websocket/start-send-pipeline conn)
+      (comms/read-loop request-ch conn)
+      (async/pipe (:send-ch conn) (:write-ch conn))
       (websocket/connection-lifecycle conn request-ch)
       (.start client)
       (if (deref (.connect client listener uri) 1000 nil)

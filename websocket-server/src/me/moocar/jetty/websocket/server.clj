@@ -1,5 +1,6 @@
 (ns me.moocar.jetty.websocket.server
   (:require [clojure.core.async :as async :refer [<!!]]
+            [me.moocar.comms-async :as comms]
             [me.moocar.jetty.websocket :as websocket])
   (:import (java.nio ByteBuffer)
            (org.eclipse.jetty.server Server ServerConnector)
@@ -13,16 +14,6 @@
   (proxy [WebSocketHandler] []
     (configure [^WebSocketServletFactory factory]
       (.setCreator factory creator))))
-
-(defn- send-to-write-ch
-  "When request contains a :response-bytes, converts them into a
-  ByteBuffer and puts onto the requets's connection's write-ch"
-  [request]
-  (let [{:keys [conn]} request
-        {:keys [write-ch]} conn]
-    (when-let [buf (websocket/response-buf request)]
-      (async/put! write-ch buf))
-    nil))
 
 (defn default-conn-f
   "Creates a default connection map"
@@ -39,7 +30,8 @@
   (fn [this request response]
     (let [conn (new-conn-f request)
           listener (websocket/listener conn)]
-      (websocket/start-send-pipeline conn)
+      (comms/read-loop request-ch conn)
+      (async/pipe (:send-ch conn) (:write-ch conn))
       (websocket/connection-lifecycle conn request-ch)
       listener)))
 
@@ -50,22 +42,6 @@
   (reify WebSocketCreator
     (createWebSocket [this request response]
       (create-websocket-f this request response))))
-
-(defn listen-for-requests
-  "Starts a pipeilne that listens for requests on request-ch and uses
-  handler-xf to handle the request. handler-xf should be a transducer
-  that returns performs any required operations and then returns the
-  request object, possible with :response-bytes if a response should
-  be sent back to the other side of the connection"
-  [request-ch handler-xf]
-  ;; to-ch is a /dev/null
-  (let [to-ch (async/chan 1 (keep (constantly nil)))]
-    (async/pipeline-blocking 1
-                             to-ch
-                             (comp handler-xf
-                                   (keep send-to-write-ch))
-                             request-ch)
-    to-ch))
 
 (defn start
   "Starts up a Jetty Server that does nothing but handle websockets.
@@ -95,7 +71,7 @@
           create-websocket-f (create-websocket request-ch new-conn-f handler-xf)
           creator (websocket-creator create-websocket-f)
           ws-handler (websocket-handler creator)
-          request-listener (listen-for-requests request-ch handler-xf)]
+          request-listener (comms/listen-for-requests request-ch handler-xf)]
       (.addConnector server connector)
       (.setHandler server ws-handler)
       (.start server)

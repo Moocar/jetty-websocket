@@ -6,6 +6,7 @@
   :dependencies [[org.clojure/clojure "1.7.0-alpha4"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
                  [me.moocar/jetty-websocket "0.1.0-SNAPSHOT"]
+                 [me.moocar/comms-async "0.1.0-SNAPSHOT"]
                  [org.eclipse.jetty.websocket/websocket-server "9.3.0.M1"]]
   :profiles {:dev {:dependencies
                    [[com.cognitect/transit-clj "0.8.259"]
