@@ -2,6 +2,7 @@
   (:require [clojure.test :refer :all]
             [clojure.core.async :as async :refer [<!!]]
             [cognitect.transit :as transit]
+            [me.moocar.comms-async :as comms]
             [me.moocar.jetty.websocket :as websocket]
             [me.moocar.jetty.websocket.client :as websocket-client]
             [me.moocar.jetty.websocket.server :as websocket-server])
@@ -99,7 +100,7 @@
     (transit/read reader)))
 
 (defn new-transit-conn []
-  (websocket/make-connection-map (map (websocket/custom-send bytes->clj clj->bytes))))
+  (websocket/make-connection-map (map (comms/custom-send bytes->clj clj->bytes))))
 
 (defn transit-echo-handler []
   (keep (fn [{:keys [request-id body] :as request}]
@@ -109,9 +110,9 @@
 (deftest t-transit
   (let [config (local-config)
         handler-xf (transit-echo-handler)
-        server (start-server config (comp (map (websocket/custom-request bytes->clj))
+        server (start-server config (comp (map (comms/custom-request bytes->clj))
                                           handler-xf
-                                          (keep (websocket/custom-response clj->bytes))))]
+                                          (keep (comms/custom-response clj->bytes))))]
     (try
       (let [client (start-client (assoc config
                                         :new-conn-f new-transit-conn))

@@ -61,6 +61,7 @@
 
   If server has already been started, immediately returns"
   [{:keys [port new-conn-f handler-xf server] :as websocket-server}]
+  {:pre [handler-xf]}
   (if server
     websocket-server
     (let [server (Server.)
@@ -119,7 +120,6 @@
   If server has already been started, immediately returns"
   [config]
   {:pre [(number? (:port config))
-         (:handler-xf config)
          (or (not (contains? config :new-conn-f))
              (fn? (:new-conn-f config)))]}
   config)

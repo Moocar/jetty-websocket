@@ -90,12 +90,12 @@
 
           write-ch
           ([buf]
-             (send-bytes! (.getRemote ^Session session) buf)
-             (recur))
+           (send-bytes! (.getRemote ^Session session) buf)
+           (recur))
           
           connect-ch
           ([[status-code reason]]
-             (async/close! connect-ch)))))))
+           (async/close! connect-ch)))))))
 
 
 
