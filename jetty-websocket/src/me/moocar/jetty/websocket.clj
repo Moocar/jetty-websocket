@@ -42,7 +42,10 @@
     (onWebSocketBinary [this bytes offset len]
       (async/put! read-ch (ByteBuffer/wrap bytes offset len)))
     (onWebSocketError [this cause]
-      (async/put! error-ch cause))
+      (when-not error-ch
+        (println "not error ch!!!"))
+      (when cause
+        (async/put! error-ch cause)))
     (onWebSocketClose [this status-code reason]
       (async/put! connect-ch [status-code reason]))))
 
@@ -92,10 +95,7 @@
           ([buf]
            (send-bytes! (.getRemote ^Session session) buf)
            (recur))
-          
+
           connect-ch
           ([[status-code reason]]
            (async/close! connect-ch)))))))
-
-
-
